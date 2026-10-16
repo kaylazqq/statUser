@@ -46,7 +46,7 @@ docker build -t topic-participant-stats:local .
 3. 将 `deployment.yaml` 中的节点名替换为 `172.31.0.71` 对应的 Kubernetes node name。
 4. 在集群外安全创建 Secret；不要提交真实值。
 5. 应用 ConfigMap、Secret、Deployment 和 NodePort Service。
-6. 在现有 ELB 增加 HTTPS 32000 监听器，后端为 `172.31.0.71:32000`，健康检查 `/healthz`。
+6. 在现有 ELB 增加 HTTPS 32000 监听器，后端为 Kubernetes Service 的 NodePort 32000，健康检查 `/healthz`。CCE 共享 ELB 使用 `externalTrafficPolicy: Cluster`；使用 `Local` 会让健康检查落到独立的 `healthCheckNodePort`，从而造成 HTTP 健康检查失败和公网 502。
 7. 用 `https://<应用域名>:32000/manifest.json` 导入 CoLink，并批准 `messages:read`、`users:read`。
 
 CoLink 主站使用 HTTPS，因此不能把 HTTP NodePort 地址直接配置成浏览器页面地址；TLS 应在 ELB 终止。

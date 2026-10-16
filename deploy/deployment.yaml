@@ -41,7 +41,10 @@ metadata:
   namespace: colink-apps
 spec:
   type: NodePort
-  externalTrafficPolicy: Local
+  # CCE ELB health checks must reach the Service NodePort on every registered
+  # backend node. Local would make CCE probe a separate healthCheckNodePort and
+  # leaves an HTTP /healthz check unhealthy on shared ELBs.
+  externalTrafficPolicy: Cluster
   selector: { app: topic-participant-stats }
   ports:
     - name: http
