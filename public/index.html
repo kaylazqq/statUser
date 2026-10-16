@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>话题参与统计</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <header><div><p class="eyebrow">当前话题</p><h1>参与统计</h1></div><button id="refresh" type="button" disabled>刷新</button></header>
+    <p id="status" role="status">正在连接 CoLink…</p>
+    <section id="stats" class="grid" hidden>
+      <article class="primary"><span>真人成员</span><strong id="human-members">–</strong></article>
+      <article class="primary"><span>发言 Agent</span><strong id="agents">–</strong></article>
+      <article><span>消息总数</span><strong id="messages">–</strong></article>
+      <article><span>真人消息</span><strong id="human-messages">–</strong></article>
+      <article><span>Agent 消息</span><strong id="agent-messages">–</strong></article>
+    </section>
+    <p id="note" class="note" hidden>Agent 按消息中的显示名称去重；同名 Agent 可能合并统计。</p>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

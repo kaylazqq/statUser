@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: topic-participant-stats
+  namespace: colink-apps
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: topic-participant-stats }
+  template:
+    metadata:
+      labels: { app: topic-participant-stats }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: REPLACE_WITH_NODE_NAME_FOR_172_31_0_71
+      containers:
+        - name: app
+          image: REPLACE_WITH_IMMUTABLE_SWR_IMAGE
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 8080 }
+          envFrom:
+            - configMapRef: { name: topic-participant-stats-config }
+            - secretRef: { name: topic-participant-stats-secret }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: topic-participant-stats
+  namespace: colink-apps
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector: { app: topic-participant-stats }
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: 32000

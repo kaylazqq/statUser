@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: topic-participant-stats-config
+  namespace: colink-apps
+data:
+  PORT: "8080"
+  COLINK_PLATFORM_ORIGIN: "REPLACE_WITH_COLINK_PLATFORM_ORIGIN"
+  COLINK_HOST_ORIGIN: "https://huawei-colink.com"
+  COLINK_PUBLIC_ORIGIN: "REPLACE_WITH_HTTPS_PUBLIC_ORIGIN_PORT_32000"
+  SESSION_COOKIE_SECURE: "true"
