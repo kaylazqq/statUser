@@ -57,6 +57,8 @@ test('serves manifest and calculates stats only from the trusted exchanged topic
   const origin = `http://127.0.0.1:${server.address().port}`;
   const manifest = await fetch(`${origin}/manifest.json`).then(r => r.json());
   assert.equal(manifest.ui.entries[0].extensionPoint.id, 'colink.topic.actions');
+  assert.equal(manifest.version, '1.0.1');
+  assert.match(manifest.description, /使用方式：安装到项目后/);
   const login = await fetch(`${origin}/api/v1/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uiSessionId: 'ui', loginCode: 'code' }) });
   assert.equal(login.status, 201);
   const cookie = login.headers.get('set-cookie').split(';')[0];
