@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createHmac } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -10,8 +11,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 const COOKIE = 'topic_stats_session';
 
-function configFromEnv(env = process.env) {
-  const required = ['COLINK_PLATFORM_ORIGIN', 'COLINK_HOST_ORIGIN', 'COLINK_PUBLIC_ORIGIN', 'COLINK_APP_ID', 'COLINK_APP_SECRET'];
+export function configFromEnv(env = process.env) {
+  const required = ['COLINK_PLATFORM_ORIGIN', 'COLINK_HOST_ORIGIN', 'COLINK_PUBLIC_ORIGIN', 'COLINK_APP_ID', 'COLINK_APP_INSTANCE_ID', 'COLINK_APP_SECRET'];
   for (const key of required) if (!env[key]) throw new Error(`${key} is required`);
   for (const key of ['COLINK_PLATFORM_ORIGIN', 'COLINK_HOST_ORIGIN', 'COLINK_PUBLIC_ORIGIN']) new URL(env[key]);
   return {
@@ -20,6 +21,7 @@ function configFromEnv(env = process.env) {
     hostOrigin: new URL(env.COLINK_HOST_ORIGIN).origin,
     publicOrigin: new URL(env.COLINK_PUBLIC_ORIGIN).origin,
     appId: env.COLINK_APP_ID,
+    appInstanceId: env.COLINK_APP_INSTANCE_ID,
     appSecret: env.COLINK_APP_SECRET,
     secureCookie: env.SESSION_COOKIE_SECURE !== 'false',
   };
@@ -68,6 +70,13 @@ export async function createServer(options = {}) {
     try {
       if (request.method === 'GET' && url.pathname === '/healthz') return send(response, 200, 'ok', { 'Content-Type': 'text/plain; charset=utf-8' });
       if (request.method === 'GET' && url.pathname === '/readyz') return send(response, 200, { ready: true }, { 'Content-Type': 'application/json' });
+      if (request.method === 'GET' && url.pathname === '/.well-known/colink-app') {
+        const challenge = url.searchParams.get('challenge') || '';
+        if (!/^[a-f0-9]{64}$/.test(challenge)) return send(response, 400, { code: 'INVALID_CHALLENGE', message: 'challenge must be 64 lowercase hexadecimal characters' }, { 'Content-Type': 'application/json; charset=utf-8' });
+        const payload = `colink-app-verification-v1\n${config.appId}\n${config.appInstanceId}\n${challenge}`;
+        const signature = createHmac('sha256', config.appSecret).update(payload).digest('hex');
+        return send(response, 200, { appId: config.appId, appInstanceId: config.appInstanceId, signature }, { 'Content-Type': 'application/json; charset=utf-8' });
+      }
       if (request.method === 'GET' && url.pathname === '/manifest.json') return send(response, 200, manifest, { 'Content-Type': 'application/json; charset=utf-8' });
       if (request.method === 'GET' && ['/index.html', '/app.js', '/styles.css', '/'].includes(url.pathname)) {
         const name = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);

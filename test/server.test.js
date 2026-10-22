@@ -1,9 +1,43 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { createServer } from '../src/server.js';
+import { createHmac } from 'node:crypto';
+import { configFromEnv, createServer } from '../src/server.js';
 
-const config = { port: 0, platformOrigin: 'https://colink.example', hostOrigin: 'https://colink.example', publicOrigin: 'https://stats.example', appId: 'app', appSecret: 'secret', secureCookie: false };
+const config = { port: 0, platformOrigin: 'https://colink.example', hostOrigin: 'https://colink.example', publicOrigin: 'https://stats.example', appId: 'app', appInstanceId: 'instance', appSecret: 'secret', secureCookie: false };
+
+test('requires the app instance id in environment configuration', () => {
+  assert.throws(() => configFromEnv({
+    COLINK_PLATFORM_ORIGIN: 'https://colink.example',
+    COLINK_HOST_ORIGIN: 'https://colink.example',
+    COLINK_PUBLIC_ORIGIN: 'https://stats.example',
+    COLINK_APP_ID: 'app',
+    COLINK_APP_SECRET: 'secret',
+  }), /COLINK_APP_INSTANCE_ID is required/);
+});
+
+test('proves the app identity with the issued challenge', async t => {
+  const server = await createServer({ config, client: {} });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => server.close());
+  const challenge = 'a'.repeat(64);
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/.well-known/colink-app?challenge=${challenge}`);
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  const expected = createHmac('sha256', config.appSecret)
+    .update(`colink-app-verification-v1\n${config.appId}\n${config.appInstanceId}\n${challenge}`)
+    .digest('hex');
+  assert.deepEqual(result, { appId: config.appId, appInstanceId: config.appInstanceId, signature: expected });
+  assert.equal(JSON.stringify(result).includes(config.appSecret), false);
+});
+
+test('rejects malformed app verification challenges', async t => {
+  const server = await createServer({ config, client: {} });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => server.close());
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/.well-known/colink-app?challenge=invalid`);
+  assert.equal(response.status, 400);
+});
 
 test('serves manifest and calculates stats only from the trusted exchanged topic', async t => {
   const requested = [];
