@@ -4,6 +4,7 @@ const stats = document.querySelector('#stats');
 const note = document.querySelector('#note');
 const refresh = document.querySelector('#refresh');
 let connected = false;
+let sessionToken = '';
 
 function hostRequest(port, method, params = {}) {
   return new Promise((resolve, reject) => {
@@ -33,7 +34,11 @@ async function loadStats() {
   status.textContent = '正在统计…';
   status.className = '';
   try {
-    const response = await fetch('/api/v1/topic-stats', { credentials: 'same-origin', cache: 'no-store' });
+    const response = await fetch('/api/v1/topic-stats', {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    });
     const data = await response.json();
     if (!response.ok) throw new Error(data.message || '统计失败');
     document.querySelector('#human-members').textContent = data.humanMemberCount;
@@ -66,6 +71,8 @@ window.addEventListener('message', async event => {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.message || '登录应用失败');
+    if (typeof result.sessionToken !== 'string' || !result.sessionToken) throw new Error('应用会话创建失败');
+    sessionToken = result.sessionToken;
     if (result.source.topicId !== initialized.source.topicId || result.source.channelId !== initialized.source.channelId) throw new Error('页面来源校验失败');
     await loadStats();
   } catch (error) { setError(error.message); }

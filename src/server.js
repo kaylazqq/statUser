@@ -31,6 +31,12 @@ function cookies(request) {
   return Object.fromEntries((request.headers.cookie || '').split(';').map(part => part.trim().split('=').map(decodeURIComponent)).filter(pair => pair.length === 2));
 }
 
+function sessionId(request) {
+  const authorization = request.headers.authorization || '';
+  const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(authorization);
+  return match?.[1] || cookies(request)[COOKIE];
+}
+
 function send(response, status, body, headers = {}) {
   const payload = typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body);
   response.writeHead(status, { 'Cache-Control': 'no-store', ...headers });
@@ -92,18 +98,19 @@ export async function createServer(options = {}) {
         if (!exchanged.source?.topicId || !exchanged.source?.channelId) return send(response, 403, { code: 'TOPIC_SOURCE_REQUIRED', message: '请从话题操作入口打开应用' }, { 'Content-Type': 'application/json' });
         const id = store.create(exchanged);
         const cookie = `${COOKIE}=${encodeURIComponent(id)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=1800${config.secureCookie ? '; Secure' : ''}`;
-        return send(response, 201, { source: exchanged.source, expiresAt: exchanged.expiresAt }, { 'Content-Type': 'application/json', 'Set-Cookie': cookie });
+        return send(response, 201, { sessionToken: id, source: exchanged.source, expiresAt: exchanged.expiresAt }, { 'Content-Type': 'application/json', 'Set-Cookie': cookie });
       }
       if (request.method === 'DELETE' && url.pathname === '/api/v1/sessions/current') {
-        store.delete(cookies(request)[COOKIE]);
+        store.delete(sessionId(request));
         return send(response, 204, '', { 'Set-Cookie': `${COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0${config.secureCookie ? '; Secure' : ''}` });
       }
       if (request.method === 'GET' && url.pathname === '/api/v1/topic-stats') {
-        const session = store.get(cookies(request)[COOKIE]);
+        const id = sessionId(request);
+        const session = store.get(id);
         if (!session) return send(response, 401, { code: 'SESSION_REQUIRED', message: '页面会话已失效，请重新打开应用' }, { 'Content-Type': 'application/json' });
         const validated = await client.validate(session.accessToken);
         if (validated.installationId !== session.installationId || validated.source?.topicId !== session.source.topicId || validated.source?.channelId !== session.source.channelId) {
-          store.delete(cookies(request)[COOKIE]);
+          store.delete(id);
           return send(response, 401, { code: 'SESSION_BINDING_CHANGED', message: '页面授权已变化，请重新打开应用' }, { 'Content-Type': 'application/json' });
         }
         const stats = await calculateTopicStats(client, session.source.topicId, session.accessToken);

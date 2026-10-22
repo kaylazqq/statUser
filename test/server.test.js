@@ -57,14 +57,19 @@ test('serves manifest and calculates stats only from the trusted exchanged topic
   const origin = `http://127.0.0.1:${server.address().port}`;
   const manifest = await fetch(`${origin}/manifest.json`).then(r => r.json());
   assert.equal(manifest.ui.entries[0].extensionPoint.id, 'colink.topic.actions');
-  assert.equal(manifest.version, '1.0.1');
+  assert.equal(manifest.version, '1.0.2');
   assert.match(manifest.description, /使用方式：安装到项目后/);
   const login = await fetch(`${origin}/api/v1/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uiSessionId: 'ui', loginCode: 'code' }) });
   assert.equal(login.status, 201);
+  const created = await login.json();
+  assert.match(created.sessionToken, /^[A-Za-z0-9_-]{43}$/);
   const cookie = login.headers.get('set-cookie').split(';')[0];
-  const response = await fetch(`${origin}/api/v1/topic-stats?topicId=attacker-topic`, { headers: { Cookie: cookie } });
+  const response = await fetch(`${origin}/api/v1/topic-stats?topicId=attacker-topic`, { headers: { Authorization: `Bearer ${created.sessionToken}` } });
   assert.equal(response.status, 200);
   assert.ok(requested.every(item => item.includes('trusted-topic')));
+
+  const compatible = await fetch(`${origin}/api/v1/topic-stats`, { headers: { Cookie: cookie } });
+  assert.equal(compatible.status, 200);
 });
 
 test('rejects stats without an app session', async t => {

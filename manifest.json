@@ -3,7 +3,7 @@
   "name": "话题参与统计",
   "description": "统计当前话题的参与人数、发言 Agent 数和消息数量。使用方式：安装到项目后，打开任意话题，在话题标题右侧点击“参与统计”，即可查看该话题的实时统计结果。应用仅读取当前话题的成员和消息信息，不会修改或发送消息。",
   "tag": "App",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "supportedInstallationScopes": ["project"],
   "permissions": ["messages:read", "users:read"],
   "ui": {
