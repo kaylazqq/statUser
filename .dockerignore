@@ -1,7 +1,7 @@
 .git
-.gitignore
+node_modules
+app.env
 .env
-test
-deploy
-docs
+*.state*
 *.log
+test

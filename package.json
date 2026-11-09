@@ -1,14 +1,16 @@
 {
   "name": "colink-topic-participant-stats",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=24.15.0"
   },
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test",
-    "check": "node --check src/server.js && node --check public/app.js"
-  }
+    "test": "node --test --test-timeout=5000 test/*.test.js",
+    "check": "node --check src/server.js && node --check src/stats.js && node --check public/app.js && node --check scripts/prepare-sdk.mjs",
+    "prepare:sdk": "node scripts/prepare-sdk.mjs"
+  },
+  "dependencies": { "@colink/app-sdk": "file:.sdk/colink-app-sdk-0.11.0.tgz" }
 }

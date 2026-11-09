@@ -5,14 +5,16 @@ metadata:
   namespace: colink-apps
 spec:
   replicas: 1
+  strategy: { type: Recreate }
   selector:
     matchLabels: { app: topic-participant-stats }
   template:
     metadata:
       labels: { app: topic-participant-stats }
     spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 }
       nodeSelector:
-        kubernetes.io/hostname: REPLACE_WITH_NODE_NAME_FOR_172_31_0_71
+        kubernetes.io/hostname: REPLACE_WITH_APPROVED_NODE_NAME
       containers:
         - name: app
           image: REPLACE_WITH_IMMUTABLE_SWR_IMAGE
@@ -23,7 +25,7 @@ spec:
             - configMapRef: { name: topic-participant-stats-config }
             - secretRef: { name: topic-participant-stats-secret }
           readinessProbe:
-            httpGet: { path: /readyz, port: http }
+            httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 3
             periodSeconds: 5
           livenessProbe:
@@ -33,6 +35,11 @@ spec:
           resources:
             requests: { cpu: 50m, memory: 64Mi }
             limits: { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - { name: state, mountPath: /data }
+      volumes:
+        - name: state
+          persistentVolumeClaim: { claimName: REPLACE_WITH_DEDICATED_STATE_PVC }
 ---
 apiVersion: v1
 kind: Service

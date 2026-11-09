@@ -1,110 +1,120 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-import { ColinkClient, ColinkError } from './colink-client.js';
+import { createCoLinkApp, openEncryptedStore, validateIssuer, CoLinkError } from '@colink/app-sdk';
 import { calculateTopicStats } from './stats.js';
-import { SessionStore } from './session-store.js';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
-const COOKIE = 'topic_stats_session';
-
-function configFromEnv(env = process.env) {
-  const required = ['COLINK_PLATFORM_ORIGIN', 'COLINK_HOST_ORIGIN', 'COLINK_PUBLIC_ORIGIN', 'COLINK_APP_ID', 'COLINK_APP_SECRET'];
-  for (const key of required) if (!env[key]) throw new Error(`${key} is required`);
-  for (const key of ['COLINK_PLATFORM_ORIGIN', 'COLINK_HOST_ORIGIN', 'COLINK_PUBLIC_ORIGIN']) new URL(env[key]);
-  return {
-    port: Number(env.PORT || 8080),
-    platformOrigin: new URL(env.COLINK_PLATFORM_ORIGIN).origin,
-    hostOrigin: new URL(env.COLINK_HOST_ORIGIN).origin,
-    publicOrigin: new URL(env.COLINK_PUBLIC_ORIGIN).origin,
-    appId: env.COLINK_APP_ID,
-    appSecret: env.COLINK_APP_SECRET,
-    secureCookie: env.SESSION_COOKIE_SECURE !== 'false',
-  };
+export function configFromEnv(env = process.env) {
+  const required = key => { if (!env[key]) throw Error(`${key} is required`); return env[key]; };
+  const local = env.COLINK_ALLOW_INSECURE_ISSUER === 'true';
+  const issuer = required('COLINK_ISSUER'), hostOrigin = required('COLINK_HOST_ORIGIN');
+  const publicOrigin = env.COLINK_APP_ORIGIN || required('COLINK_PUBLIC_ORIGIN');
+  if (env.COLINK_APP_ORIGIN && env.COLINK_PUBLIC_ORIGIN && env.COLINK_APP_ORIGIN !== env.COLINK_PUBLIC_ORIGIN) throw Error('Conflicting App origins');
+  for (const origin of [issuer, hostOrigin, publicOrigin]) validateIssuer(origin, local);
+  const maxStatsConcurrency = Number(env.STATS_MAX_CONCURRENCY || 32), port = Number(env.PORT || 8080);
+  if (!Number.isInteger(maxStatsConcurrency) || maxStatsConcurrency < 1 || maxStatsConcurrency > 256) throw Error('Invalid STATS_MAX_CONCURRENCY');
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid PORT');
+  return { port, hostOrigin, publicOrigin, maxStatsConcurrency,
+    stateFile: required('COLINK_STATE_FILE'), credentialKey: required('COLINK_CREDENTIAL_KEY'),
+    sdk: { issuer, apiBase: issuer + '/api/v1', allowInsecureIssuer: local,
+      appId: required('COLINK_APP_ID'), appInstanceId: required('COLINK_APP_INSTANCE_ID'),
+      clientId: required('COLINK_CLIENT_ID'), clientSecret: required('COLINK_CLIENT_SECRET'), signingSecret: required('COLINK_SIGNING_SECRET') } };
 }
-
-function cookies(request) {
-  return Object.fromEntries((request.headers.cookie || '').split(';').map(part => part.trim().split('=').map(decodeURIComponent)).filter(pair => pair.length === 2));
+const json = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+function send(res, status, data, headers = json) {
+  res.writeHead(status, headers);
+  res.end(Buffer.isBuffer(data) || typeof data === 'string' ? data : JSON.stringify(data));
 }
-
-function send(response, status, body, headers = {}) {
-  const payload = typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body);
-  response.writeHead(status, { 'Cache-Control': 'no-store', ...headers });
-  response.end(payload);
-}
-
-async function body(request) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of request) {
-    size += chunk.length;
-    if (size > 16_384) throw new Error('REQUEST_TOO_LARGE');
-    chunks.push(chunk);
+function errorResponse(res, error) {
+  if (res.destroyed || res.writableEnded) return;
+  if (error instanceof CoLinkError) {
+    const status = error.status >= 400 && error.status <= 599 ? error.status : 502;
+    return send(res, status, error.toJSON());
   }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+  send(res, 502, { code: 'STATS_UNAVAILABLE', message: '本次统计未完成，不能作为空结果使用。', hint: '检查授权和平台连接后重试。' });
 }
-
-function errorResponse(response, error) {
-  if (error instanceof ColinkError) {
-    const status = [400, 401, 403, 404, 409].includes(error.status) ? error.status : 502;
-    send(response, status, { code: error.code || 'PLATFORM_REQUEST_FAILED', message: error.message, requestId: error.requestId });
-    return;
-  }
-  const status = error.message === 'REQUEST_TOO_LARGE' ? 413 : error instanceof SyntaxError ? 400 : 500;
-  send(response, status, { code: status === 500 ? 'INTERNAL_ERROR' : error.message, message: status === 500 ? '服务暂时不可用' : '请求格式无效' });
-}
-
 export async function createServer(options = {}) {
   const config = options.config || configFromEnv();
-  const manifest = JSON.parse(await readFile(path.join(root, 'manifest.json'), 'utf8'));
-  const store = options.store || new SessionStore();
-  const client = options.client || new ColinkClient({ origin: config.platformOrigin, appId: config.appId, appSecret: config.appSecret });
-  const files = new Map(await Promise.all(['index.html', 'app.js', 'styles.css'].map(async name => [name, await readFile(path.join(root, 'public', name))])));
-
-  return http.createServer(async (request, response) => {
-    const url = new URL(request.url, config.publicOrigin);
+  const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
+  const app = options.app || createCoLinkApp({ config: config.sdk,
+    store: openEncryptedStore(config.stateFile, config.credentialKey), manifest,
+    pages: { origin: config.publicOrigin, capabilities: { readOnly: true } } });
+  const files = new Map(await Promise.all(['index.html', 'app.js', 'styles.css'].map(async name =>
+    ['/' + name, await readFile(new URL('../public/' + name, import.meta.url))])));
+  const browser = options.browserModule || await readFile(new URL(import.meta.resolve('@colink/app-sdk/browser')));
+  let active = 0;
+  const server = http.createServer(async (req, res) => {
     try {
-      if (request.method === 'GET' && url.pathname === '/healthz') return send(response, 200, 'ok', { 'Content-Type': 'text/plain; charset=utf-8' });
-      if (request.method === 'GET' && url.pathname === '/readyz') return send(response, 200, { ready: true }, { 'Content-Type': 'application/json' });
-      if (request.method === 'GET' && url.pathname === '/manifest.json') return send(response, 200, manifest, { 'Content-Type': 'application/json; charset=utf-8' });
-      if (request.method === 'GET' && ['/index.html', '/app.js', '/styles.css', '/'].includes(url.pathname)) {
-        const name = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-        const content = name === 'app.js'
-          ? Buffer.from(files.get(name).toString('utf8').replace('__COLINK_HOST_ORIGIN__', JSON.stringify(config.hostOrigin)))
-          : files.get(name);
-        return send(response, 200, content, { 'Content-Type': MIME[path.extname(name)], 'Cache-Control': 'public, max-age=300', 'Content-Security-Policy': `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors ${config.hostOrigin}` });
+      const url = new URL(req.url, config.publicOrigin);
+      if (req.method === 'GET' && url.pathname === '/page-config.json') {
+        return send(res, 200, { hostOrigin: config.hostOrigin, issuer: config.sdk.issuer, allowInsecureLocal: config.sdk.allowInsecureIssuer });
       }
-      if (request.method === 'POST' && url.pathname === '/api/v1/sessions') {
-        const input = await body(request);
-        if (typeof input.uiSessionId !== 'string' || typeof input.loginCode !== 'string') return send(response, 400, { code: 'INVALID_INPUT', message: '缺少登录信息' }, { 'Content-Type': 'application/json' });
-        const exchanged = await client.exchange(input.uiSessionId, input.loginCode);
-        if (!exchanged.source?.topicId || !exchanged.source?.channelId) return send(response, 403, { code: 'TOPIC_SOURCE_REQUIRED', message: '请从话题操作入口打开应用' }, { 'Content-Type': 'application/json' });
-        const id = store.create(exchanged);
-        const cookie = `${COOKIE}=${encodeURIComponent(id)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=1800${config.secureCookie ? '; Secure' : ''}`;
-        return send(response, 201, { source: exchanged.source, expiresAt: exchanged.expiresAt }, { 'Content-Type': 'application/json', 'Set-Cookie': cookie });
+      if (req.method === 'GET' && url.pathname === '/colink-browser.mjs') {
+        return send(res, 200, browser, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
       }
-      if (request.method === 'DELETE' && url.pathname === '/api/v1/sessions/current') {
-        store.delete(cookies(request)[COOKIE]);
-        return send(response, 204, '', { 'Set-Cookie': `${COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0${config.secureCookie ? '; Secure' : ''}` });
+      const file = url.pathname === '/' ? '/index.html' : url.pathname;
+      if (req.method === 'GET' && files.has(file)) {
+        const type = file.endsWith('.html') ? 'text/html' : file.endsWith('.js') ? 'text/javascript' : 'text/css';
+        return send(res, 200, files.get(file), { 'Content-Type': type + '; charset=utf-8', 'Cache-Control': 'no-store',
+          'Content-Security-Policy': `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors ${config.hostOrigin}` });
       }
-      if (request.method === 'GET' && url.pathname === '/api/v1/topic-stats') {
-        const session = store.get(cookies(request)[COOKIE]);
-        if (!session) return send(response, 401, { code: 'SESSION_REQUIRED', message: '页面会话已失效，请重新打开应用' }, { 'Content-Type': 'application/json' });
-        const validated = await client.validate(session.accessToken);
-        if (validated.installationId !== session.installationId || validated.source?.topicId !== session.source.topicId || validated.source?.channelId !== session.source.channelId) {
-          store.delete(cookies(request)[COOKIE]);
-          return send(response, 401, { code: 'SESSION_BINDING_CHANGED', message: '页面授权已变化，请重新打开应用' }, { 'Content-Type': 'application/json' });
+      if (['GET', 'POST'].includes(req.method) && url.pathname === '/api/v1/topic-stats') {
+        if (req.method === 'POST') {
+          let size = 0;
+          for await (const chunk of req) {
+            size += chunk.length;
+            if (size > 2048) return send(res, 413, { code: 'REQUEST_TOO_LARGE' });
+          }
         }
-        const stats = await calculateTopicStats(client, session.source.topicId, session.accessToken);
-        return send(response, 200, stats, { 'Content-Type': 'application/json' });
+        const identity = await app.pages.authenticate(req);
+        const source = identity.source;
+        if (typeof source?.topicId !== 'string' || !source.topicId || typeof source.channelId !== 'string' || !source.channelId) {
+          return send(res, 403, { code: 'TOPIC_SOURCE_REQUIRED', message: '请从话题操作入口打开。' });
+        }
+        const mode = url.searchParams.get('mode') || 'public';
+        if (!['public', 'private'].includes(mode)) return send(res, 400, { code: 'INVALID_READ_MODE' });
+        if (mode === 'private' && !identity.scopes.includes('messages:read-private')) {
+          return send(res, 403, { code: 'PAGE_AUTHORIZATION_REQUIRED', message: '私密话题需要当前使用者授权。' });
+        }
+        if (active >= config.maxStatsConcurrency) return send(res, 429, { code: 'STATS_BUSY', message: '统计繁忙，请稍后重试。' }, { ...json, 'Retry-After': '1' });
+        active++;
+        const abort = new AbortController();
+        const closed = () => { if (!res.writableEnded) abort.abort(); };
+        res.once('close', closed);
+        try {
+          // Select identity before the read, never by retrying a failed identity.
+          const client = mode === 'private' ? app.pages.client(req) : app.client(identity.installationId);
+          const result = await calculateTopicStats(client, source.topicId, { signal: abort.signal });
+          if (!abort.signal.aborted) send(res, 200, { ...result, readMode: mode });
+        } finally { active--; res.off('close', closed); }
+        return;
       }
-      return send(response, 404, { code: 'NOT_FOUND', message: '接口不存在' }, { 'Content-Type': 'application/json' });
-    } catch (error) { errorResponse(response, error); }
+      // SDK retains original bytes/signatures and owns OAuth, installation/ready and page sessions.
+      await app.publicHandler(req, res);
+    } catch (error) { errorResponse(res, error); }
   });
+  server.requestTimeout = 30_000;
+  server.headersTimeout = 10_000;
+  server.app = app;
+  return server;
 }
-
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  createServer().then(server => server.listen(configFromEnv().port, '0.0.0.0', () => console.log('topic participant stats listening'))).catch(error => { console.error(error.message); process.exit(1); });
+  let server;
+  if (process.env.COLINK_BOOTSTRAP === 'true') {
+    const { pendingManifestHandler } = await import('../node_modules/@colink/app-sdk/examples/shared/bootstrap.mjs');
+    const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
+    server = http.createServer(pendingManifestHandler({ manifest, stateFile: process.env.COLINK_STATE_FILE }));
+    server.listen(Number(process.env.PORT || 8080), '0.0.0.0');
+  } else {
+    server = await createServer();
+    server.listen(configFromEnv().port, '0.0.0.0', () => { server.app.start(); console.log('topic participant stats listening'); });
+  }
+  let closing = false;
+  for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, async () => {
+    if (closing) return;
+    closing = true;
+    await server.app?.close();
+    server.closeAllConnections();
+    server.close();
+  });
 }
