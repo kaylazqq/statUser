@@ -10,6 +10,7 @@
   <main>
     <header><div><p class="eyebrow">当前话题</p><h1>参与统计</h1></div><button id="refresh" type="button" disabled>刷新</button></header>
     <p id="status" role="status">正在连接 CoLink…</p>
+    <div class="actions"><button id="public-read" type="button" disabled>统计公共话题</button><button id="private-read" type="button" disabled>统计私密话题（需授权）</button></div>
     <section id="stats" class="grid" hidden>
       <article class="primary"><span>真人成员</span><strong id="human-members">–</strong></article>
       <article class="primary"><span>发言 Agent</span><strong id="agents">–</strong></article>
@@ -17,7 +18,7 @@
       <article><span>真人消息</span><strong id="human-messages">–</strong></article>
       <article><span>Agent 消息</span><strong id="agent-messages">–</strong></article>
     </section>
-    <p id="note" class="note" hidden>Agent 按消息中的显示名称去重；同名 Agent 可能合并统计。</p>
+    <p id="note" class="note" hidden>Agent 按显示名称去重，同名可能合并。统计为分页实时读取，不是同一时刻快照；仅统计当前授权话题，不是整个频道。</p>
   </main>
   <script type="module" src="/app.js"></script>
 </body>

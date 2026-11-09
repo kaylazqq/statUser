@@ -7,6 +7,10 @@ h1 { margin: 2px 0 18px; font-size: 22px; }
 .eyebrow { margin: 0; color: #667085; font-size: 13px; }
 button { border: 1px solid #b9c5d6; border-radius: 8px; padding: 8px 15px; background: #fff; color: #1849a9; cursor: pointer; }
 button:disabled { opacity: .55; cursor: default; }
+button { min-height: 44px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+[hidden] { display: none !important; }
+@media (max-width: 390px) { main { padding: 16px; } article { padding: 12px; } article strong { font-size: 26px; } }
 #status { color: #667085; font-size: 13px; }
 .error { padding: 12px; border-radius: 8px; background: #fff1f0; color: #b42318 !important; }
 .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }

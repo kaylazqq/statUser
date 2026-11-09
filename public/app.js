@@ -1,74 +1,55 @@
-const hostOrigin = __COLINK_HOST_ORIGIN__;
-const status = document.querySelector('#status');
-const stats = document.querySelector('#stats');
-const note = document.querySelector('#note');
-const refresh = document.querySelector('#refresh');
-let connected = false;
-
-function hostRequest(port, method, params = {}) {
-  return new Promise((resolve, reject) => {
-    const requestId = crypto.randomUUID();
-    const timeout = setTimeout(() => reject(new Error('CoLink Bridge 响应超时')), 5000);
-    const receive = event => {
-      if (event.data?.protocol !== 'colink.ui/1.0.0' || event.data?.requestId !== requestId) return;
-      port.removeEventListener('message', receive);
-      clearTimeout(timeout);
-      if (event.data.error) reject(new Error(event.data.error)); else resolve(event.data.result);
-    };
-    port.addEventListener('message', receive);
-    port.start();
-    port.postMessage({ protocol: 'colink.ui/1.0.0', requestId, method, params });
-  });
+import { connectPage, createPageClient } from '/colink-browser.mjs';
+const $ = id => document.getElementById(id);
+const status = $('status'), stats = $('stats'), note = $('note');
+let page, connection, mode, busy = false;
+function clear() { stats.hidden = true; note.hidden = true; for (const strong of stats.querySelectorAll('strong')) strong.textContent = '–'; }
+function buttons() {
+  $('public-read').disabled = busy || !page;
+  $('private-read').disabled = busy || !page;
+  $('refresh').disabled = busy || !page || !mode;
 }
-
-function setError(message) {
-  status.textContent = message;
-  status.className = 'error';
-  stats.hidden = true;
-  note.hidden = true;
-}
-
-async function loadStats() {
-  refresh.disabled = true;
-  status.textContent = '正在统计…';
-  status.className = '';
+async function run(nextMode, refresh = false) {
+  if (busy || !page) return;
+  busy = true; clear(); buttons();
+  status.className = ''; status.textContent = '正在验证使用者并读取当前话题…';
   try {
-    const response = await fetch('/api/v1/topic-stats', { credentials: 'same-origin', cache: 'no-store' });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.message || '统计失败');
-    document.querySelector('#human-members').textContent = data.humanMemberCount;
-    document.querySelector('#agents').textContent = data.speakingAgentCount;
-    document.querySelector('#messages').textContent = data.messageCount;
-    document.querySelector('#human-messages').textContent = data.humanMessageCount;
-    document.querySelector('#agent-messages').textContent = data.agentMessageCount;
-    status.textContent = `更新于 ${new Date(data.computedAt).toLocaleTimeString()}`;
-    stats.hidden = false;
-    note.hidden = false;
-  } catch (error) { setError(error.message); }
-  finally { refresh.disabled = false; }
+    if (!refresh) await page.login();
+    if (nextMode === 'private' && !refresh) await page.authorize(['messages:read-private']);
+    // POST sends the browser's exact Origin, required by the trusted U client.
+    const data = await page.appRequest({ path: '/api/v1/topic-stats', method: 'POST', query: { mode: nextMode }, body: {} });
+    const fields = { 'human-members': 'humanMemberCount', agents: 'speakingAgentCount', messages: 'messageCount', 'human-messages': 'humanMessageCount', 'agent-messages': 'agentMessageCount' };
+    for (const [id, field] of Object.entries(fields)) {
+      if (!Number.isSafeInteger(data[field]) || data[field] < 0) throw Error('INVALID_STATS_RESULT');
+      $(id).textContent = data[field];
+    }
+    mode = nextMode;
+    status.textContent = `更新于 ${new Date(data.computedAt).toLocaleTimeString()} · ${mode === 'public' ? '公共话题' : '私密话题'}${data.unknownMessageCount ? ` · 其他类型消息 ${data.unknownMessageCount}` : ''}`;
+    stats.hidden = false; note.hidden = false;
+  } catch (error) {
+    clear(); mode = undefined;
+    const problem = error?.name === 'CoLinkError' && typeof error.toJSON === 'function' ? error.toJSON()
+      : { message: '统计未完成。', hint: '请检查授权后重试；页面已关闭时从 CoLink 重新打开。' };
+    status.className = 'error'; status.textContent = `${problem.message} ${problem.hint || ''}`;
+  } finally { busy = false; buttons(); }
 }
-
-refresh.addEventListener('click', loadStats);
-
-window.addEventListener('message', async event => {
-  if (connected || event.source !== window.parent || event.origin !== hostOrigin) return;
-  if (event.data?.type !== 'colink.ui.connected' || event.data?.version !== '1.0.0' || !event.ports[0]) return;
-  connected = true;
-  try {
-    const initialized = await hostRequest(event.ports[0], 'host.initialize');
-    if (!initialized?.source?.topicId || !initialized?.source?.channelId) throw new Error('请从话题操作入口打开应用');
-    document.documentElement.dataset.theme = initialized.theme === 'dark' ? 'dark' : 'light';
-    const response = await fetch('/api/v1/sessions', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uiSessionId: event.data.uiSessionId, loginCode: event.data.loginCode }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || '登录应用失败');
-    if (result.source.topicId !== initialized.source.topicId || result.source.channelId !== initialized.source.channelId) throw new Error('页面来源校验失败');
-    await loadStats();
-  } catch (error) { setError(error.message); }
-}, { once: false });
-
-window.parent.postMessage({ type: 'colink.ui.ready', version: '1.0.0' }, hostOrigin);
+$('public-read').onclick = () => run('public');
+$('private-read').onclick = () => run('private');
+$('refresh').onclick = () => run(mode, true);
+window.addEventListener('pagehide', () => { clear(); page?.close(); }, { once: true });
+try {
+  const response = await fetch('/page-config.json', { cache: 'no-store', credentials: 'omit' });
+  if (!response.ok) throw Error('PAGE_CONFIG_UNAVAILABLE');
+  const config = await response.json();
+  // Automatic handshake: host hides the iframe until initialization completes.
+  connection = connectPage(config);
+  const context = await connection.ready;
+  document.documentElement.dataset.theme = context.theme === 'dark' ? 'dark' : 'light';
+  connection.onThemeChange(({ theme }) => { document.documentElement.dataset.theme = theme; });
+  page = createPageClient({ connection, issuer: config.issuer, allowInsecureLocal: config.allowInsecureLocal });
+  status.textContent = '已连接。请选择当前话题类型；私密话题仅在本人明确授权后读取。';
+  buttons();
+  if (context.availableMethods.includes('view.ready')) await connection.presentationReady();
+} catch {
+  page = undefined; clear(); buttons();
+  status.className = 'error'; status.textContent = '无法连接 CoLink，请从受信任的 CoLink 话题入口重新打开。';
+}
