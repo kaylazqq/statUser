@@ -44,9 +44,12 @@ docker build -t topic-participant-stats:local .
 | COLINK_SIGNING_SECRET | 独立安装通知验签密钥，不能复用客户端密钥 |
 | COLINK_STATE_FILE / COLINK_CREDENTIAL_KEY | 独占持久状态路径 / 稳定的 32 字节十六进制加密密钥 |
 | STATS_MAX_CONCURRENCY / PORT | 1–256（默认 32）/ 默认 8080 |
+| STATS_TELEMETRY_ENABLED | 显式 true 开启内存分段统计；默认关闭。/metrics 仅回环地址可访问 |
 | COLINK_ALLOW_INSECURE_ISSUER | 仅本机回环联调 true，不能用于公网 HTTP |
 
 自有接口 `POST /api/v1/topic-stats?mode=public|private` 使用 SDK App 会话 Bearer、精确 Origin 和空 JSON。POST 保证浏览器携带 Origin，满足可信 U 客户端校验；它没有写业务数据。保留 GET 供公共读取；私密 U 调用仍必须具有正确 Origin。匿名、来源缺失、撤权、读取失败不算业务成功。
+
+开启统计时，HTML、登录 start/complete、私密授权 start/complete、统计及退出分别记录完整本端 HTTP 耗时、结果、在途数量和最长驻留。SDK 使用公开 fetcher 注入点观察上游 Token、会话校验、执行查询及 JWKS 的响应头耗时；`*_headers` 不包含响应正文读取或本地验签，不能当成整段兑换耗时，也不能与父阶段直接相加。有限阶段标签不含 URL 参数、用户、消息、凭据或资源 ID；内存缓冲有界，未采集显示未知，不写业务数据库。SDK 的 1000 个事务/会话容量保持原值，监控容量不代表已提高容量。
 
 ## 登记、升级和回退
 
