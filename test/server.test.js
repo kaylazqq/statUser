@@ -8,10 +8,10 @@ const identity = { installationId: 'install-1', userId: 'u1', source: { channelI
 const empty = { items: [], hasMore: false, nextCursor: null };
 async function fixture(t, overrides = {}) {
   const calls = [];
-  const c = { participants: { list: async q => { calls.push(q); return { ...empty, items: [{ userId: 'u1' }] }; } }, topicMessages: { read: async q => { calls.push(q); return { ...empty, items: [{ id: 'm1', senderKind: 'human' }] }; } } };
-  const app = { pages: { authenticate: async () => identity, client: () => { calls.push('U'); return c; } },
-    client: id => { calls.push(['A', id]); return c; }, publicHandler: async (req, res) => { res.writeHead(404); res.end(); }, ...overrides };
-  const server = await createServer({ config, app }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const c = { topics: { listParticipants: async q => { calls.push(q); return { ...empty, items: [{ userId: 'u1' }] }; }, listMessages: async q => { calls.push(q); return { ...empty, items: [{ id: 'm1', senderKind: 'human' }] }; } } };
+  const app = { pages: { authenticate: async () => identity }, userClient: () => { calls.push('U'); return c; },
+    appClient: ({ installationId }) => { calls.push(['A', installationId]); return c; }, ...overrides };
+  const server = await createServer({ config, app, protocolHandler: async () => false }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => { server.closeAllConnections(); server.close(); });
   return { server, app, calls, origin: `http://127.0.0.1:${server.address().port}` };
 }
@@ -37,7 +37,7 @@ test('private mode requires U and never silently uses A', async t => {
 test('failed private read never falls back to installation A', async t => {
   const f = await fixture(t);
   f.app.pages.authenticate = async () => ({ ...identity, scopes: ['messages:read-private'] });
-  f.app.pages.client = () => { throw new CoLinkError('ACCESS_DENIED', 403); };
+  f.app.userClient = () => { throw new CoLinkError('ACCESS_DENIED', 403); };
   assert.equal((await fetch(f.origin + '/api/v1/topic-stats?mode=private')).status, 403); assert.equal(f.calls.length, 0);
 });
 test('missing trusted topic and invalid read mode do not read data', async t => {
@@ -47,7 +47,7 @@ test('missing trusted topic and invalid read mode do not read data', async t => 
   assert.equal((await fetch(f.origin + '/api/v1/topic-stats')).status, 403); assert.equal(f.calls.length, 0);
 });
 test('unknown errors do not leak upstream credentials or become zeros', async t => {
-  const f = await fixture(t, { client: () => { throw Error('secret raw request'); } });
+  const f = await fixture(t, { appClient: () => { throw Error('secret raw request'); } });
   const r = await fetch(f.origin + '/api/v1/topic-stats'); assert.equal(r.status, 502);
   const text = await r.text(); assert.ok(!text.includes('secret')); assert.ok(!text.includes('messageCount'));
 });
@@ -63,7 +63,7 @@ test('bounded concurrency rejects overload and releases its slot after failure',
   let entered, finish;
   const started = new Promise(resolve => { entered = resolve; });
   const pending = new Promise(resolve => { finish = resolve; });
-  f.app.client = () => ({ participants: { list: async () => { entered(); await pending; throw Error('failed'); } }, topicMessages: { read: async () => empty } });
+  f.app.appClient = () => ({ topics: { listParticipants: async () => { entered(); await pending; throw Error('failed'); }, listMessages: async () => empty } });
   const first = fetch(f.origin + '/api/v1/topic-stats');
   await started;
   try {
@@ -71,7 +71,7 @@ test('bounded concurrency rejects overload and releases its slot after failure',
     assert.equal(busy.status, 429); assert.equal(busy.headers.get('retry-after'), '1');
   } finally { finish(); }
   assert.equal((await first).status, 502);
-  f.app.client = () => ({ participants: { list: async () => empty }, topicMessages: { read: async () => empty } });
+  f.app.appClient = () => ({ topics: { listParticipants: async () => empty, listMessages: async () => empty } });
   assert.equal((await fetch(f.origin + '/api/v1/topic-stats')).status, 200);
 });
 test('each request revalidates current user and installation instead of caching prior identity', async t => {

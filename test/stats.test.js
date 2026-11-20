@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { calculateTopicStats } from '../src/stats.js';
 const page = items => ({ items, hasMore: false, nextCursor: null });
-const client = (people, messages) => ({ participants: { list: people }, topicMessages: { read: messages } });
+const client = (people, messages) => ({ topics: { listParticipants: people, listMessages: messages } });
 test('paginates actual SDK methods, deduplicates IDs, counts humans/agents/unknown without retaining bodies', async () => {
   const calls = [];
   const c = client(async q => { calls.push(q); return q.cursor ? page([{ userId: 'u2' }, { userId: 'u1' }]) : { items: [{ userId: 'u1' }], hasMore: true, nextCursor: 'p2' }; },
