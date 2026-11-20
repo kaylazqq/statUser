@@ -3,8 +3,9 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
-const version = '0.11.0';
-const sha256 = 'be526521b50e48d223f68155233b271e2f337e9e2411d18f79d2a372b20b38d3';
+// Local candidate matches the audited accessSplit source, not a newer website SDK.
+const version = '0.18.0';
+const sha256 = 'e3d15a9ad79bcb2eb70ad34209f0a35d391cdbd6513031436b998de5dabdc065';
 const file = new URL(`../.sdk/colink-app-sdk-${version}.tgz`, import.meta.url);
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 let bytes;

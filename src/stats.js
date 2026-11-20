@@ -21,11 +21,11 @@ export async function calculateTopicStats(client, topicId, { signal, now = () =>
   let humanMessageCount = 0, agentMessageCount = 0, unknownMessageCount = 0;
   const startedAt = now().toISOString();
   const results = await Promise.allSettled([
-    scan(query => client.participants.list({ topicId, ...query }), item => {
+    scan(query => client.topics.listParticipants({ topicId, ...query }), item => {
       if (typeof item?.userId !== 'string' || !item.userId) throw Error('INVALID_PARTICIPANT');
       humans.add(item.userId);
     }, signal),
-    scan(query => client.topicMessages.read({ topicId, ...query }), item => {
+    scan(query => client.topics.listMessages({ topicId, ...query }), item => {
       if (typeof item?.id !== 'string' || !item.id) throw Error('INVALID_MESSAGE');
       if (messages.has(item.id)) return;
       messages.add(item.id);

@@ -1,6 +1,6 @@
 # CoLink 话题参与统计
 
-独立只读应用，在话题操作菜单提供“参与统计”。2.0 使用官方 App SDK 0.11.0、Manifest/Events 2.0、Bridge 1.0；不再使用旧 loginCode/session-exchanges 或第三方 Cookie。
+独立只读应用，在话题操作菜单提供“参与统计”。当前本地候选使用与 CoLink accessSplit 固定代码配套的 App SDK 0.18.0（归档 SHA-256 固定于 `scripts/prepare-sdk.mjs`）、Manifest/Events 2.0、Bridge 1.0；不再使用旧 loginCode/session-exchanges 或第三方 Cookie。此候选仅作本地联合性能验证，不代表已发布升级。
 
 ## 操作与口径
 
@@ -49,7 +49,7 @@ docker build -t topic-participant-stats:local .
 
 自有接口 `POST /api/v1/topic-stats?mode=public|private` 使用 SDK App 会话 Bearer、精确 Origin 和空 JSON。POST 保证浏览器携带 Origin，满足可信 U 客户端校验；它没有写业务数据。保留 GET 供公共读取；私密 U 调用仍必须具有正确 Origin。匿名、来源缺失、撤权、读取失败不算业务成功。
 
-开启统计时，HTML、登录 start/complete、私密授权 start/complete、统计及退出分别记录完整本端 HTTP 耗时、结果、在途数量和最长驻留。SDK 使用公开 fetcher 注入点观察上游 Token、会话校验、执行查询及 JWKS 的响应头耗时；`*_headers` 不包含响应正文读取或本地验签，不能当成整段兑换耗时，也不能与父阶段直接相加。有限阶段标签不含 URL 参数、用户、消息、凭据或资源 ID；内存缓冲有界，未采集显示未知，不写业务数据库。SDK 的 1000 个事务/会话容量保持原值，监控容量不代表已提高容量。
+开启统计时，HTML、登录 start/complete、私密授权 start/complete、统计及退出分别记录完整本端 HTTP 耗时、结果、在途数量和最长驻留。当前 SDK 公共入口不再允许注入 fetcher/store，因此本应用不再采集 SDK 上游响应头耗时和内部事务/会话数量，不能将缺失指标解释成零；`echo_stats_sdk_storage_observation_available=0` 明确表示不可观测。有限阶段标签不含 URL 参数、用户、消息、凭据或资源 ID；内存缓冲有界，不写业务数据库。没有修改 SDK 内部容量或清空 SDK 历史账本。
 
 ## 登记、升级和回退
 

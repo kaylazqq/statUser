@@ -16,7 +16,7 @@ async function run(nextMode, refresh = false) {
     if (!refresh) await page.login();
     if (nextMode === 'private' && !refresh) await page.authorize(['messages:read-private']);
     // POST sends the browser's exact Origin, required by the trusted U client.
-    const data = await page.appRequest({ path: '/api/v1/topic-stats', method: 'POST', query: { mode: nextMode }, body: {} });
+    const data = await page.requestBackend({ path: '/api/v1/topic-stats', method: 'POST', query: { mode: nextMode }, body: {} });
     const fields = { 'human-members': 'humanMemberCount', agents: 'speakingAgentCount', messages: 'messageCount', 'human-messages': 'humanMessageCount', 'agent-messages': 'agentMessageCount' };
     for (const [id, field] of Object.entries(fields)) {
       if (!Number.isSafeInteger(data[field]) || data[field] < 0) throw Error('INVALID_STATS_RESULT');
@@ -45,7 +45,7 @@ try {
   const context = await connection.ready;
   document.documentElement.dataset.theme = context.theme === 'dark' ? 'dark' : 'light';
   connection.onThemeChange(({ theme }) => { document.documentElement.dataset.theme = theme; });
-  page = createPageClient({ connection, issuer: config.issuer, allowInsecureLocal: config.allowInsecureLocal });
+  page = await createPageClient({ connection, issuer: config.issuer });
   status.textContent = '已连接。请选择当前话题类型；私密话题仅在本人明确授权后读取。';
   buttons();
   if (context.availableMethods.includes('view.ready')) await connection.presentationReady();

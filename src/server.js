@@ -1,9 +1,15 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { createCoLinkApp, openEncryptedStore, validateIssuer, CoLinkError } from '@colink/app-sdk';
+import { createCoLinkRuntime, createCoLinkHttpHandler, CoLinkError } from '@colink/app-sdk';
 import { calculateTopicStats } from './stats.js';
 import { createTelemetry } from './telemetry.js';
+
+function validateIssuer(origin, local) {
+  const url = new URL(origin);
+  if (url.origin !== origin || !(url.protocol === 'https:' || local === true && url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))
+    throw Error('An exact HTTPS origin is required');
+}
 
 export function configFromEnv(env = process.env) {
   const required = key => { if (!env[key]) throw Error(`${key} is required`); return env[key]; };
@@ -17,7 +23,7 @@ export function configFromEnv(env = process.env) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid PORT');
   return { port, hostOrigin, publicOrigin, maxStatsConcurrency, telemetryEnabled: env.STATS_TELEMETRY_ENABLED === 'true',
     stateFile: required('COLINK_STATE_FILE'), credentialKey: required('COLINK_CREDENTIAL_KEY'),
-    sdk: { issuer, apiBase: issuer + '/api/v1', allowInsecureIssuer: local,
+    sdk: { issuer, allowInsecureIssuer: local,
       appId: required('COLINK_APP_ID'), appInstanceId: required('COLINK_APP_INSTANCE_ID'),
       clientId: required('COLINK_CLIENT_ID'), clientSecret: required('COLINK_CLIENT_SECRET'), signingSecret: required('COLINK_SIGNING_SECRET') } };
 }
@@ -38,10 +44,15 @@ export async function createServer(options = {}) {
   const config = options.config || configFromEnv();
   const telemetry=createTelemetry({enabled:config.telemetryEnabled,issuer:config.sdk.issuer,fetcher:options.fetcher||fetch});
   const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
-  const store=options.app?undefined:openEncryptedStore(config.stateFile,config.credentialKey);
-  const app = options.app || createCoLinkApp({ config: config.sdk,
-    store, manifest,
-    pages: { origin: config.publicOrigin, capabilities: { readOnly: true } }, fetcher:telemetry.fetcher });
+  const { apiBase: unusedApiBase, ...sdk } = config.sdk;
+  // Consume the pinned SDK's public runtime API. Do not inject a transport/store
+  // through removed private options or weaken the SDK's current online checks.
+  const app = options.app || createCoLinkRuntime({
+    config: { ...sdk, stateFile: config.stateFile, credentialKey: config.credentialKey,
+      appOrigin: config.publicOrigin, hostOrigin: config.hostOrigin, capabilities: { readOnly: true } },
+    manifest, pages: { origin: config.publicOrigin },
+  });
+  const protocolHandler = options.protocolHandler || await createCoLinkHttpHandler(app);
   const files = new Map(await Promise.all(['index.html', 'app.js', 'styles.css'].map(async name =>
     ['/' + name, await readFile(new URL('../public/' + name, import.meta.url))])));
   const browser = options.browserModule || await readFile(new URL(import.meta.resolve('@colink/app-sdk/browser')));
@@ -53,7 +64,9 @@ export async function createServer(options = {}) {
       const url = new URL(req.url, config.publicOrigin);
       if(req.method==='GET'&&url.pathname==='/metrics'){
         if(!config.telemetryEnabled||!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress))return send(res,404,{code:'NOT_FOUND'});
-        const state=store?`echo_stats_sdk_transactions ${Object.keys(store.data.pageTransactions||{}).length}\necho_stats_sdk_sessions ${Object.keys(store.data.pageSessions||{}).length}\necho_stats_sdk_capacity 1000\n`:'';
+        // The new public SDK does not expose live storage counters. Unknown is
+        // not zero; an operator may observe the owned encrypted file separately.
+        const state='echo_stats_sdk_storage_observation_available 0\n';
         return send(res,200,telemetry.render()+state,{'Content-Type':'text/plain; version=0.0.4','Cache-Control':'no-store'});
       }
       if (req.method === 'GET' && url.pathname === '/page-config.json') {
@@ -93,14 +106,15 @@ export async function createServer(options = {}) {
         res.once('close', closed);
         try {
           // Select identity before the read, never by retrying a failed identity.
-          const client = mode === 'private' ? app.pages.client(req) : app.client(identity.installationId);
+          const client = mode === 'private' ? app.userClient({ request: req }, { signal: abort.signal })
+            : app.appClient({ installationId: identity.installationId }, { signal: abort.signal });
           const result = await calculateTopicStats(client, source.topicId, { signal: abort.signal });
           if (!abort.signal.aborted) send(res, 200, { ...result, readMode: mode });
         } finally { active--; res.off('close', closed); }
         return;
       }
       // SDK retains original bytes/signatures and owns OAuth, installation/ready and page sessions.
-      await app.publicHandler(req, res);
+      if (!await protocolHandler(req, res)) send(res, 404, { code: 'NOT_FOUND' });
     } catch (error) { errorResponse(res, error); }
     });
   });
